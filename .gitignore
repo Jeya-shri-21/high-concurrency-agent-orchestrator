@@ -30,10 +30,13 @@ target/
 .classpath
 .project
 .settings/
+.factorypath
+bin/
 
 # IntelliJ IDEA metadata
 .idea/
 *.iml
+*.iws
 
 # VS Code metadata
 .vscode/
