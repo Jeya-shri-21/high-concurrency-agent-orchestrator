@@ -16,6 +16,7 @@
     <artifactId>high-concurrency-agent-orchestrator</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>high-concurrency-agent-orchestrator</name>
+    <description>Zaalima High-Concurrency Autonomous Agent Orchestrator</description>
 
     <properties>
         <java.version>21</java.version>
@@ -28,6 +29,18 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
         </dependency>
 
         <dependency>
