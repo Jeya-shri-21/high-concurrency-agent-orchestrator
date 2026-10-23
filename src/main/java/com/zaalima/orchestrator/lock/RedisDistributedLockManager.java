@@ -15,8 +15,12 @@ import java.util.Collections;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Redis-backed distributed implementation of {@link DistributedLockManager}.
@@ -51,14 +55,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *       a newer owner's lock.</li>
  * </ul>
  *
- * <h3>Lease Expiration and Safety Semantics</h3>
+ * <h3>Atomic Lease Renewal & Watchdog Semantics</h3>
  * <ul>
- *   <li>Every lock has a finite lease duration (TTL). If an instance crashes or is partitioned, the key
- *       expires automatically in Redis to prevent permanent deadlocks.</li>
- *   <li><strong>CRITICAL LIMITATION:</strong> In this Day 2 implementation, no automatic background renewal
- *       (watchdog) is enabled. If a task executes longer than {@code leaseDuration}, the lease will expire
- *       while work is still running. Downstream consumers must either size the lease appropriately, implement
- *       periodic validity checks via {@link DistributedLock#isValid()}, or utilize fencing tokens.</li>
+ *   <li>Lease renewal is executed atomically via an owner-verifying evaluation Lua script:
+ *     <pre>{@code
+ *       if redis.call("get", KEYS[1]) == ARGV[1] then
+ *           return redis.call("pexpire", KEYS[1], ARGV[2])
+ *       else
+ *           return 0
+ *       end
+ *     }</pre>
+ *   </li>
+ *   <li>A lock's TTL is extended only if the caller's owner token currently holds the active Redis key.
+ *       Expired locks or locks reassigned to other nodes cannot be renewed.</li>
+ *   <li>Optional auto-renewal (watchdog) schedules periodic renewal on a provided {@link ScheduledExecutorService}
+ *       and automatically terminates when the lock is closed, ownership is lost, or renewal fails.</li>
  * </ul>
  */
 @Component("redisDistributedLockManager")
@@ -70,6 +81,17 @@ public class RedisDistributedLockManager implements DistributedLockManager {
             """
             if redis.call('get', KEYS[1]) == ARGV[1] then
                 return redis.call('del', KEYS[1])
+            else
+                return 0
+            end
+            """,
+            Long.class
+    );
+
+    private static final RedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>(
+            """
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+                return redis.call('pexpire', KEYS[1], ARGV[2])
             else
                 return 0
             end
@@ -169,6 +191,38 @@ public class RedisDistributedLockManager implements DistributedLockManager {
     }
 
     @Override
+    public boolean renew(DistributedLock lock, Duration extensionDuration) {
+        if (lock == null || lock.getToken() == null) {
+            return false;
+        }
+        Objects.requireNonNull(extensionDuration, "extensionDuration must not be null");
+        if (extensionDuration.isNegative() || extensionDuration.isZero()) {
+            throw new IllegalArgumentException("extensionDuration must be positive");
+        }
+
+        LockToken token = lock.getToken();
+        try {
+            Long result = redisTemplate.execute(
+                    RENEW_SCRIPT,
+                    Collections.singletonList(token.lockKey()),
+                    token.ownerToken(),
+                    String.valueOf(extensionDuration.toMillis())
+            );
+
+            boolean renewed = (result != null && result == 1L);
+            if (!renewed) {
+                log.warn("Failed to renew lock for key: {}, owner: {}. Lock expired or reassigned.",
+                        token.lockKey(), token.ownerToken());
+            }
+            return renewed;
+        } catch (DataAccessException e) {
+            log.error("Redis infrastructure failure renewing lock for key: {}, owner: {}",
+                    token.lockKey(), token.ownerToken(), e);
+            return false;
+        }
+    }
+
+    @Override
     public boolean isLocked(String lockKey) {
         if (lockKey == null || lockKey.isBlank()) {
             return false;
@@ -180,6 +234,32 @@ public class RedisDistributedLockManager implements DistributedLockManager {
             log.error("Redis infrastructure failure checking lock status for key: {}", lockKey, e);
             throw new LockAcquisitionException("Redis unavailable while checking lock state for key: " + lockKey, e);
         }
+    }
+
+    /**
+     * Attempts to acquire a lock and automatically schedule background renewal tasks.
+     *
+     * @param lockKey the resource identifier
+     * @param leaseDuration lease duration
+     * @param acquireTimeout timeout to acquire
+     * @param scheduler executor for background renewal
+     * @param renewalInterval interval between renewal attempts
+     * @return acquired lock with auto-renewal active, or empty
+     */
+    public Optional<DistributedLock> tryAcquireWithAutoRenewal(
+            String lockKey,
+            Duration leaseDuration,
+            Duration acquireTimeout,
+            ScheduledExecutorService scheduler,
+            Duration renewalInterval) {
+        Optional<DistributedLock> lockOpt = tryAcquire(lockKey, leaseDuration, acquireTimeout);
+        if (lockOpt.isPresent()) {
+            DistributedLock lock = lockOpt.get();
+            if (lock instanceof RedisDistributedLock redisLock) {
+                redisLock.startAutoRenewal(scheduler, renewalInterval, leaseDuration);
+            }
+        }
+        return lockOpt;
     }
 
     public String getInstanceId() {
@@ -208,10 +288,11 @@ public class RedisDistributedLockManager implements DistributedLockManager {
     /**
      * Internal implementation of {@link DistributedLock} bound to this Redis lock manager.
      */
-    private final class RedisDistributedLock implements DistributedLock {
+    public final class RedisDistributedLock implements DistributedLock {
 
-        private final LockToken token;
+        private volatile LockToken token;
         private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final AtomicReference<ScheduledFuture<?>> renewalTask = new AtomicReference<>();
 
         private RedisDistributedLock(LockToken token) {
             this.token = token;
@@ -242,8 +323,60 @@ public class RedisDistributedLockManager implements DistributedLockManager {
         }
 
         @Override
+        public boolean renew(Duration extensionDuration) {
+            if (closed.get()) {
+                return false;
+            }
+            boolean renewed = RedisDistributedLockManager.this.renew(this, extensionDuration);
+            if (renewed) {
+                Instant now = Instant.now();
+                this.token = new LockToken(
+                        token.lockKey(),
+                        token.ownerToken(),
+                        token.acquiredAt(),
+                        now.plus(extensionDuration)
+                );
+            }
+            return renewed;
+        }
+
+        public synchronized boolean startAutoRenewal(ScheduledExecutorService scheduler, Duration interval, Duration extensionDuration) {
+            Objects.requireNonNull(scheduler, "scheduler must not be null");
+            Objects.requireNonNull(interval, "interval must not be null");
+            Objects.requireNonNull(extensionDuration, "extensionDuration must not be null");
+            if (closed.get() || !isValid()) {
+                return false;
+            }
+            ScheduledFuture<?> task = scheduler.scheduleAtFixedRate(() -> {
+                if (closed.get()) {
+                    stopAutoRenewal();
+                    return;
+                }
+                boolean renewed = renew(extensionDuration);
+                if (!renewed) {
+                    log.warn("Auto-renewal failed for key: {}. Stopping renewal task.", token.lockKey());
+                    stopAutoRenewal();
+                }
+            }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+
+            ScheduledFuture<?> prev = renewalTask.getAndSet(task);
+            if (prev != null) {
+                prev.cancel(false);
+            }
+            return true;
+        }
+
+        public synchronized void stopAutoRenewal() {
+            ScheduledFuture<?> task = renewalTask.getAndSet(null);
+            if (task != null) {
+                task.cancel(false);
+            }
+        }
+
+        @Override
         public void close() {
             if (closed.compareAndSet(false, true)) {
+                stopAutoRenewal();
                 release(this);
             }
         }

@@ -24,6 +24,17 @@ public interface DistributedLock extends AutoCloseable {
     boolean isValid();
 
     /**
+     * Atomically extends this lock's lease duration by the specified duration,
+     * provided this handle still holds the active lock in the underlying store.
+     *
+     * @param extensionDuration the duration to extend the lease by (must be positive)
+     * @return true if the lease was successfully renewed, false if expired, ownership was lost, or lock is closed
+     */
+    default boolean renew(java.time.Duration extensionDuration) {
+        return false;
+    }
+
+    /**
      * Releases this lock safely. Releasing is ownership-safe: if the lock has expired or has
      * been acquired by another owner, this handle will not delete the new owner's lock.
      */

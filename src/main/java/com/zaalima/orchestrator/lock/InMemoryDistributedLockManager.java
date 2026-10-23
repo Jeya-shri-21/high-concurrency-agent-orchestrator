@@ -137,6 +137,37 @@ public class InMemoryDistributedLockManager implements DistributedLockManager {
     }
 
     @Override
+    public boolean renew(DistributedLock lock, Duration extensionDuration) {
+        if (lock == null || lock.getToken() == null) {
+            return false;
+        }
+        Objects.requireNonNull(extensionDuration, "extensionDuration must not be null");
+        if (extensionDuration.isNegative() || extensionDuration.isZero()) {
+            throw new IllegalArgumentException("extensionDuration must be positive");
+        }
+
+        LockToken tokenToRenew = lock.getToken();
+        AtomicBoolean renewed = new AtomicBoolean(false);
+
+        locks.computeIfPresent(tokenToRenew.lockKey(), (key, existingToken) -> {
+            if (existingToken.ownerToken().equals(tokenToRenew.ownerToken()) && !existingToken.isExpired()) {
+                Instant now = Instant.now();
+                LockToken updatedToken = new LockToken(
+                        tokenToRenew.lockKey(),
+                        tokenToRenew.ownerToken(),
+                        existingToken.acquiredAt(),
+                        now.plus(extensionDuration)
+                );
+                renewed.set(true);
+                return updatedToken;
+            }
+            return existingToken;
+        });
+
+        return renewed.get();
+    }
+
+    @Override
     public boolean isLocked(String lockKey) {
         if (lockKey == null) {
             return false;
@@ -154,7 +185,7 @@ public class InMemoryDistributedLockManager implements DistributedLockManager {
      */
     private final class LocalDistributedLock implements DistributedLock {
 
-        private final LockToken token;
+        private volatile LockToken token;
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private LocalDistributedLock(LockToken token) {
@@ -180,6 +211,21 @@ public class InMemoryDistributedLockManager implements DistributedLockManager {
             return current != null
                     && current.ownerToken().equals(token.ownerToken())
                     && !current.isExpired();
+        }
+
+        @Override
+        public boolean renew(Duration extensionDuration) {
+            if (closed.get()) {
+                return false;
+            }
+            boolean renewed = InMemoryDistributedLockManager.this.renew(this, extensionDuration);
+            if (renewed) {
+                LockToken current = locks.get(token.lockKey());
+                if (current != null) {
+                    this.token = current;
+                }
+            }
+            return renewed;
         }
 
         @Override

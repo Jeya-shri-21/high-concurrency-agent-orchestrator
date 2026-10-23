@@ -321,4 +321,63 @@ class RedisDistributedLockManagerIntegrationTest {
         assertTrue(successfulAcquisitions.get() >= 1,
                 "At least one contender should have successfully acquired the lock");
     }
+
+    @Test
+    @DisplayName("10. Atomic lease renewal extends TTL when owner matches")
+    void test10_AtomicLeaseRenewalExtendsTtlWhenOwnerMatches() throws InterruptedException {
+        String key = "lock:task:test-10";
+
+        // Manager 1 acquires lock with 400ms lease
+        Optional<DistributedLock> m1LockOpt = manager1.tryAcquire(key, Duration.ofMillis(400), Duration.ofSeconds(1));
+        assertTrue(m1LockOpt.isPresent());
+        DistributedLock m1Lock = m1LockOpt.get();
+
+        // Wait 200ms and renew for 2 seconds
+        Thread.sleep(200);
+        boolean renewed = m1Lock.renew(Duration.ofSeconds(2));
+        assertTrue(renewed, "Renewal should succeed for active owner");
+
+        // Wait an additional 300ms (500ms total, exceeding original 400ms lease)
+        Thread.sleep(300);
+
+        // Lock must still be actively held in Redis due to renewal
+        assertTrue(manager1.isLocked(key), "Lock must still be held after renewal despite original lease expiring");
+        assertTrue(m1Lock.isValid());
+
+        // Second manager should still not be able to acquire
+        Optional<DistributedLock> m2LockOpt = manager2.tryAcquire(key, Duration.ofSeconds(1), Duration.ZERO);
+        assertTrue(m2LockOpt.isEmpty());
+
+        m1Lock.close();
+        assertFalse(manager1.isLocked(key));
+    }
+
+    @Test
+    @DisplayName("11. Stale owner cannot renew after lease expiration")
+    void test11_StaleOwnerCannotRenewAfterExpiration() throws InterruptedException {
+        String key = "lock:task:test-11";
+
+        // Manager 1 acquires lock with 250ms lease
+        Optional<DistributedLock> m1LockOpt = manager1.tryAcquire(key, Duration.ofMillis(250), Duration.ofSeconds(1));
+        assertTrue(m1LockOpt.isPresent());
+        DistributedLock m1Lock = m1LockOpt.get();
+
+        // Wait 350ms for lease to expire
+        Thread.sleep(350);
+
+        // Manager 2 acquires reassigned key
+        Optional<DistributedLock> m2LockOpt = manager2.tryAcquire(key, Duration.ofSeconds(5), Duration.ofSeconds(1));
+        assertTrue(m2LockOpt.isPresent());
+        DistributedLock m2Lock = m2LockOpt.get();
+
+        // Stale Manager 1 attempts to renew
+        boolean m1RenewResult = m1Lock.renew(Duration.ofSeconds(5));
+        assertFalse(m1RenewResult, "Stale owner must not be allowed to renew a reassigned lock");
+
+        // Verify Manager 2 still holds the lock
+        assertTrue(manager2.isLocked(key));
+        assertTrue(m2Lock.isValid());
+
+        m2Lock.close();
+    }
 }

@@ -33,6 +33,19 @@ public interface DistributedLockManager {
     boolean release(DistributedLock lock);
 
     /**
+     * Atomically renews the lease duration of the given lock, provided the caller is still the active owner.
+     * <p>
+     * Re-sets the expiration TTL on the underlying lock store if and only if the current owner token
+     * matches the token recorded in {@code lock}. If the lock has already expired or been acquired by another
+     * owner, the renewal fails and returns {@code false}.
+     *
+     * @param lock the lock handle to renew (must not be null)
+     * @param extensionDuration the duration to extend the lease by (must be positive)
+     * @return true if the lease was successfully renewed, false if expired, ownership was lost, or lock is closed
+     */
+    boolean renew(DistributedLock lock, Duration extensionDuration);
+
+    /**
      * Checks whether a lock key is currently actively held by any owner.
      *
      * @param lockKey the lock key to check

@@ -294,4 +294,142 @@ class RedisDistributedLockManagerTest {
             assertThrows(LockAcquisitionException.class, () -> lockManager.isLocked("lock:task:400"));
         }
     }
+
+    @Nested
+    @DisplayName("Lease Renewal Tests")
+    class RenewalTests {
+
+        @Test
+        @DisplayName("Atomic renewal succeeds when owner matches and key exists")
+        @SuppressWarnings("unchecked")
+        void testSuccessfulRenewal() {
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.setIfAbsent(eq("lock:task:500"), anyString(), eq(Duration.ofSeconds(10))))
+                    .thenReturn(Boolean.TRUE);
+
+            DistributedLock lock = lockManager.tryAcquire("lock:task:500", Duration.ofSeconds(10), Duration.ZERO).orElseThrow();
+            Instant originalExpiresAt = lock.getToken().expiresAt();
+
+            when(redisTemplate.execute(any(RedisScript.class), eq(Collections.singletonList("lock:task:500")), eq(lock.getToken().ownerToken()), eq("20000")))
+                    .thenReturn(1L);
+
+            boolean renewed = lock.renew(Duration.ofSeconds(20));
+
+            assertTrue(renewed, "Renewal should succeed when Lua script returns 1");
+            assertTrue(lock.getToken().expiresAt().isAfter(originalExpiresAt), "Expiration instant must be updated after renewal");
+        }
+
+        @Test
+        @DisplayName("Renewal returns false when key expired or held by different owner")
+        @SuppressWarnings("unchecked")
+        void testRenewalFailsWhenOwnerMismatchOrExpired() {
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.setIfAbsent(eq("lock:task:501"), anyString(), eq(Duration.ofSeconds(10))))
+                    .thenReturn(Boolean.TRUE);
+
+            DistributedLock lock = lockManager.tryAcquire("lock:task:501", Duration.ofSeconds(10), Duration.ZERO).orElseThrow();
+
+            when(redisTemplate.execute(any(RedisScript.class), eq(Collections.singletonList("lock:task:501")), eq(lock.getToken().ownerToken()), eq("15000")))
+                    .thenReturn(0L);
+
+            boolean renewed = lock.renew(Duration.ofSeconds(15));
+
+            assertFalse(renewed, "Renewal must return false when Lua script returns 0");
+        }
+
+        @Test
+        @DisplayName("Renewal on a closed lock handle immediately returns false")
+        @SuppressWarnings("unchecked")
+        void testRenewalFailsOnClosedLock() {
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.setIfAbsent(eq("lock:task:502"), anyString(), eq(Duration.ofSeconds(10))))
+                    .thenReturn(Boolean.TRUE);
+
+            DistributedLock lock = lockManager.tryAcquire("lock:task:502", Duration.ofSeconds(10), Duration.ZERO).orElseThrow();
+
+            when(redisTemplate.execute(any(RedisScript.class), eq(Collections.singletonList("lock:task:502")), eq(lock.getToken().ownerToken())))
+                    .thenReturn(1L);
+
+            lock.close();
+
+            boolean renewed = lock.renew(Duration.ofSeconds(10));
+            assertFalse(renewed, "Cannot renew an already closed lock handle");
+        }
+
+        @Test
+        @DisplayName("Renewal catches Redis infrastructure error safely and returns false")
+        @SuppressWarnings("unchecked")
+        void testRenewalHandlesRedisError() {
+            LockToken token = new LockToken("lock:task:503", "token-503", Instant.now(), Instant.now().plusSeconds(10));
+            DistributedLock mockLock = mock(DistributedLock.class);
+            when(mockLock.getToken()).thenReturn(token);
+
+            when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString()))
+                    .thenThrow(new RedisSystemException("Redis down", new RuntimeException()));
+
+            boolean renewed = lockManager.renew(mockLock, Duration.ofSeconds(10));
+
+            assertFalse(renewed, "Renewal must return false when Redis infrastructure fails");
+        }
+
+        @Test
+        @DisplayName("Renewal input validation tests")
+        void testRenewalValidation() {
+            assertFalse(lockManager.renew(null, Duration.ofSeconds(10)));
+
+            LockToken token = new LockToken("lock:task:504", "token-504", Instant.now(), Instant.now().plusSeconds(10));
+            DistributedLock mockLock = mock(DistributedLock.class);
+            when(mockLock.getToken()).thenReturn(token);
+
+            assertThrows(NullPointerException.class, () -> lockManager.renew(mockLock, null));
+            assertThrows(IllegalArgumentException.class, () -> lockManager.renew(mockLock, Duration.ZERO));
+            assertThrows(IllegalArgumentException.class, () -> lockManager.renew(mockLock, Duration.ofSeconds(-5)));
+        }
+
+        @Test
+        @DisplayName("Auto-renewal schedules background task and cancels upon close")
+        @SuppressWarnings("unchecked")
+        void testAutoRenewalLifecycle() throws Exception {
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.setIfAbsent(eq("lock:task:505"), anyString(), eq(Duration.ofSeconds(10))))
+                    .thenReturn(Boolean.TRUE);
+
+            // Need to match owner token dynamically
+            when(redisTemplate.execute(any(RedisScript.class), eq(Collections.singletonList("lock:task:505")), anyString(), eq("10000")))
+                    .thenReturn(1L);
+            when(redisTemplate.execute(any(RedisScript.class), eq(Collections.singletonList("lock:task:505")), anyString()))
+                    .thenReturn(1L);
+
+            java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+            try {
+                Optional<DistributedLock> lockOpt = lockManager.tryAcquire(
+                        "lock:task:505",
+                        Duration.ofSeconds(10),
+                        Duration.ZERO
+                );
+
+                assertTrue(lockOpt.isPresent());
+                DistributedLock lock = lockOpt.get();
+                when(valueOperations.get(eq("lock:task:505"))).thenReturn(lock.getToken().ownerToken());
+
+                boolean started = ((RedisDistributedLockManager.RedisDistributedLock) lock)
+                        .startAutoRenewal(scheduler, Duration.ofMillis(30), Duration.ofSeconds(10));
+                assertTrue(started, "Auto renewal should start successfully");
+
+                // Wait for scheduled renewal run
+                Thread.sleep(100);
+
+                verify(redisTemplate, atLeastOnce()).execute(
+                        any(RedisScript.class),
+                        eq(Collections.singletonList("lock:task:505")),
+                        eq(lock.getToken().ownerToken()),
+                        eq("10000")
+                );
+
+                lock.close();
+            } finally {
+                scheduler.shutdownNow();
+            }
+        }
+    }
 }
