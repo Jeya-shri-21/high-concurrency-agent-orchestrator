@@ -49,6 +49,7 @@ class TaskExecutionServiceTest {
     @Test
     @DisplayName("Task executes and completes when lock is acquired successfully, releasing lock upon exit")
     void testTaskExecutionSuccessWithLock() throws Exception {
+        when(distributedLock.isValid()).thenReturn(true);
         when(lockManager.tryAcquire(eq("lock:task:task-101"), any(Duration.class), any(Duration.class)))
                 .thenReturn(Optional.of(distributedLock));
 
@@ -60,6 +61,48 @@ class TaskExecutionServiceTest {
         assertEquals(TaskStatus.COMPLETED, task.getStatus());
         verify(lockManager, times(1)).tryAcquire(eq("lock:task:task-101"), any(Duration.class), any(Duration.class));
         verify(distributedLock, times(1)).close();
+    }
+
+    @Test
+    @DisplayName("Task fails if lock validity check fails before completing execution (stale-owner protection)")
+    void testTaskFailsWhenLockValidityCheckFailsBeforeCompletion() throws Exception {
+        // Lock acquired, but lease expired / lost before completion checkpoint
+        when(distributedLock.isValid()).thenReturn(false);
+        when(lockManager.tryAcquire(eq("lock:task:task-stale"), any(Duration.class), any(Duration.class)))
+                .thenReturn(Optional.of(distributedLock));
+
+        AgentTask task = new AgentTask("task-stale", "agent-1", "PROCESS", "payload");
+        Future<?> future = service.submitTask(task);
+
+        future.get(5, TimeUnit.SECONDS);
+
+        assertEquals(TaskStatus.FAILED, task.getStatus(), "Task must not complete if lock was lost during execution");
+        verify(distributedLock, times(1)).close();
+    }
+
+    @Test
+    @DisplayName("Concurrent attempts to execute the same task are prevented from executing simultaneously")
+    void testConcurrentAttemptsToExecuteSameTask() throws Exception {
+        when(distributedLock.isValid()).thenReturn(true);
+        when(lockManager.tryAcquire(eq("lock:task:task-dup"), any(Duration.class), any(Duration.class)))
+                .thenReturn(Optional.of(distributedLock))
+                .thenReturn(Optional.empty()); // Second contender fails to acquire
+
+        AgentTask task1 = new AgentTask("task-dup", "agent-1", "PROCESS", "payload-1");
+        AgentTask task2 = new AgentTask("task-dup", "agent-1", "PROCESS", "payload-2");
+
+        Future<?> f1 = service.submitTask(task1);
+        Future<?> f2 = service.submitTask(task2);
+
+        f1.get(5, TimeUnit.SECONDS);
+        f2.get(5, TimeUnit.SECONDS);
+
+        // One completes, the other fails due to lock acquisition timeout
+        assertTrue(
+                (task1.getStatus() == TaskStatus.COMPLETED && task2.getStatus() == TaskStatus.FAILED) ||
+                (task2.getStatus() == TaskStatus.COMPLETED && task1.getStatus() == TaskStatus.FAILED),
+                "Exactly one task should complete and the conflicting contender should fail"
+        );
     }
 
     @Test

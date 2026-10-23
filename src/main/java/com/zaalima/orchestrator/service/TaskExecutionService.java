@@ -71,6 +71,16 @@ public class TaskExecutionService {
 
                 Thread.sleep(2000);
 
+                // Checkpoint: verify lock validity before committing completion
+                if (!lock.isValid()) {
+                    task.setStatus(TaskStatus.FAILED);
+                    System.err.println(
+                        "Task " + task.getTaskId()
+                        + " lost lock lease or ownership during execution; failing task"
+                    );
+                    return;
+                }
+
                 task.setStatus(TaskStatus.COMPLETED);
 
                 System.out.println(
