@@ -1,5 +1,6 @@
 package com.zaalima.orchestrator.lock;
 
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -27,7 +28,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link ConcurrentHashMap#computeIfPresent(Object, java.util.function.BiFunction)} operations,
  * mirroring the atomic semantics of Redis {@code SET NX PX} and the ownership-verifying Lua release script.
  */
-@Component
+@Component("inMemoryDistributedLockManager")
+@Primary
 public class InMemoryDistributedLockManager implements DistributedLockManager {
 
     private final String instanceId;
