@@ -42,9 +42,9 @@ public class TaskExecutionService {
 
     public Future<?> submitTask(AgentTask task) {
 
-        tasks.put(task.getTaskId(), task);
+        Objects.requireNonNull(task, "task must not be null");
 
-        return executor.submit(() -> {
+        Future<?> future = executor.submit(() -> {
             String lockKey = "lock:task:" + task.getTaskId();
             Optional<DistributedLock> lockOpt;
             try {
@@ -101,6 +101,9 @@ public class TaskExecutionService {
                 );
             }
         });
+
+        tasks.put(task.getTaskId(), task);
+        return future;
     }
 
     public AgentTask getTask(String taskId) {
