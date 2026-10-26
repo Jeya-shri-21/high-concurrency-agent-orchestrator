@@ -1,0 +1,33 @@
+# Git and documentation
+.git/
+.gitignore
+docs/
+*.md
+
+# Local build output and caches
+target/
+.mvn/
+mvnw*
+
+# IDE and editor directories
+.idea/
+.vscode/
+*.iml
+*.iws
+.project
+.classpath
+.settings/
+.factorypath
+bin/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+*.log
+*.dump
+*.dumpstream
