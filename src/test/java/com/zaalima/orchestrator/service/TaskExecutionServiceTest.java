@@ -1,5 +1,7 @@
 package com.zaalima.orchestrator.service;
 
+import java.util.ArrayList;
+import java.util.List;
 import com.zaalima.orchestrator.lock.DistributedLock;
 import com.zaalima.orchestrator.lock.DistributedLockManager;
 import com.zaalima.orchestrator.lock.LockAcquisitionException;
@@ -155,4 +157,123 @@ class TaskExecutionServiceTest {
         assertEquals(TaskStatus.FAILED, task.getStatus());
         verify(distributedLock, times(1)).close();
     }
+
+	@Test
+	@DisplayName("Multiple tasks execute concurrently using virtual threads")
+	void testMultipleTasksExecuteConcurrently() throws Exception {
+	    int taskCount = 3;
+	    when(distributedLock.isValid()).thenReturn(true);
+
+	    when(lockManager.tryAcquire(
+	            startsWith("lock:task:concurrent-"),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.of(distributedLock));
+	    List<AgentTask> tasks = new ArrayList<>();
+	    List<Future<?>> futures = new ArrayList<>();
+	
+	    for (int i = 1; i <= taskCount; i++) {
+	        AgentTask task = new AgentTask(
+	                "concurrent-" + i,
+	                "agent-" + i,
+	                "PROCESS",
+	                "payload-" + i
+	        );
+	
+	        tasks.add(task);
+	        futures.add(service.submitTask(task));
+	    }
+	
+	    long startTime = System.nanoTime();
+	
+	    for (Future<?> future : futures) {
+	        future.get(10, TimeUnit.SECONDS);
+	    }
+	
+	    long elapsedMillis =
+	            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
+	
+	    for (AgentTask task : tasks) {
+	        assertEquals(
+	                TaskStatus.COMPLETED,
+	                task.getStatus(),
+	                "Each task should complete successfully"
+	        );
+	    }
+	
+	    assertTrue(
+	            elapsedMillis < 5500,
+	            "Tasks should overlap in execution; elapsed time was "
+	                    + elapsedMillis + " ms"
+	    );
+	}
+
+	@Test
+	@DisplayName("Executor rejects new tasks after shutdown")
+	void testExecutorRejectsTasksAfterShutdown() {
+	    service.shutdown();
+	
+	    AgentTask task = new AgentTask(
+	            "task-after-shutdown",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+	
+	    assertThrows(
+	            java.util.concurrent.RejectedExecutionException.class,
+	            () -> service.submitTask(task),
+	            "Submitting a task after shutdown should be rejected"
+	    );
+	}
+	
+	@Test
+	@DisplayName("Rejected task is not retained in the task map")
+	void testRejectedTaskIsNotRetained() {
+	    service.shutdown();
+	
+	    AgentTask task = new AgentTask(
+	            "rejected-task",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+	
+	    assertThrows(
+	            java.util.concurrent.RejectedExecutionException.class,
+	            () -> service.submitTask(task)
+	    );
+	
+	    assertNull(
+	            service.getTask("rejected-task"),
+	            "A task rejected by the executor should not remain in the task map"
+	    );
+	}
+
+	@Test
+	@DisplayName("Distributed lock is released after successful task execution")
+	void testLockReleasedAfterSuccessfulTask() throws Exception {
+	    AgentTask task = new AgentTask(
+	            "task-lock-release",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+	
+	    when(lockManager.tryAcquire(
+	            eq("lock:task:task-lock-release"),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.of(distributedLock));
+	
+	    when(distributedLock.isValid()).thenReturn(true);
+	
+	    Future<?> future = service.submitTask(task);
+	    future.get(5, TimeUnit.SECONDS);
+	
+	    assertEquals(TaskStatus.COMPLETED, task.getStatus());
+	    verify(distributedLock).close();
+	}
+
+
 }
