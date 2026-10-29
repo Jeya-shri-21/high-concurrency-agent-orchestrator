@@ -5,6 +5,10 @@ import com.zaalima.orchestrator.lock.DistributedLockManager;
 import com.zaalima.orchestrator.lock.InMemoryDistributedLockManager;
 import com.zaalima.orchestrator.model.AgentTask;
 import com.zaalima.orchestrator.model.TaskStatus;
+import com.zaalima.orchestrator.resilience.client.ExternalAgentClient;
+import com.zaalima.orchestrator.resilience.exception.BulkheadFullException;
+import com.zaalima.orchestrator.resilience.exception.CircuitBreakerOpenException;
+import com.zaalima.orchestrator.resilience.exception.ExternalApiTimeoutException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,10 +34,17 @@ public class TaskExecutionService {
             new ConcurrentHashMap<>();
 
     private final DistributedLockManager lockManager;
+    private final ExternalAgentClient externalAgentClient;
 
     @Autowired
-    public TaskExecutionService(DistributedLockManager lockManager) {
+    public TaskExecutionService(DistributedLockManager lockManager,
+                                @Autowired(required = false) ExternalAgentClient externalAgentClient) {
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager must not be null");
+        this.externalAgentClient = externalAgentClient;
+    }
+
+    public TaskExecutionService(DistributedLockManager lockManager) {
+        this(lockManager, null);
     }
 
     public TaskExecutionService() {
@@ -69,7 +80,11 @@ public class TaskExecutionService {
                     + " started on " + Thread.currentThread()
                 );
 
-                Thread.sleep(2000);
+                if (isRemoteTask(task) && externalAgentClient != null) {
+                    externalAgentClient.executeTask(task.getAgentId(), task);
+                } else {
+                    Thread.sleep(2000);
+                }
 
                 // Checkpoint: verify lock validity before committing completion
                 if (!lock.isValid()) {
@@ -87,6 +102,15 @@ public class TaskExecutionService {
                     "Task " + task.getTaskId() + " completed"
                 );
 
+            } catch (CircuitBreakerOpenException e) {
+                task.setStatus(TaskStatus.FAILED);
+                System.err.println("Task " + task.getTaskId() + " failed: CircuitBreaker is open - " + e.getMessage());
+            } catch (BulkheadFullException e) {
+                task.setStatus(TaskStatus.FAILED);
+                System.err.println("Task " + task.getTaskId() + " failed: Bulkhead limit reached - " + e.getMessage());
+            } catch (ExternalApiTimeoutException e) {
+                task.setStatus(TaskStatus.FAILED);
+                System.err.println("Task " + task.getTaskId() + " failed: Operation timed out - " + e.getMessage());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 task.setStatus(TaskStatus.FAILED);
@@ -108,6 +132,15 @@ public class TaskExecutionService {
 
     public AgentTask getTask(String taskId) {
         return tasks.get(taskId);
+    }
+
+    private boolean isRemoteTask(AgentTask task) {
+        String type = task.getTaskType();
+        return type != null && (
+                type.equalsIgnoreCase("REMOTE_AGENT") ||
+                type.equalsIgnoreCase("EXTERNAL_API") ||
+                type.equalsIgnoreCase("REMOTE")
+        );
     }
 
     public void shutdown() {
