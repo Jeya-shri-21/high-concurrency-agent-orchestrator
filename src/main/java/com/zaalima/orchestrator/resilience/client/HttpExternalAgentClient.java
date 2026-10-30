@@ -8,6 +8,7 @@ import com.zaalima.orchestrator.resilience.exception.ExternalApiValidationExcept
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -38,7 +39,7 @@ public class HttpExternalAgentClient implements ExternalAgentClient {
         this.resilientExecutor = Objects.requireNonNull(resilientExecutor, "ResilientOperationExecutor must not be null");
         this.httpClient = Objects.requireNonNull(httpClient, "HttpClient must not be null");
     }
-
+    @Autowired
     public HttpExternalAgentClient(
             ResilienceManager resilienceManager,
             ResilientOperationExecutor resilientExecutor) {
