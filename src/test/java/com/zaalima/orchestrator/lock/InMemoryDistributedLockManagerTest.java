@@ -163,28 +163,35 @@ class InMemoryDistributedLockManagerTest {
         AtomicInteger maxSimultaneousHolders = new AtomicInteger(0);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicBoolean raceDetected = new AtomicBoolean(false);
+        AtomicBoolean invalidLockDetected = new AtomicBoolean(false);
+        AtomicInteger criticalSectionSequence = new AtomicInteger(0);
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int i = 0; i < threadCount; i++) {
                 executor.submit(() -> {
                     try {
                         startLatch.await();
-                        // Contend for the lock with 1500ms timeout and 200ms lease
+                        // Contend for the lock with bounded acquire timeout and sufficient lease duration
                         Optional<DistributedLock> lockOpt = lockManager.tryAcquire(
                                 key,
-                                Duration.ofMillis(200),
-                                Duration.ofMillis(1500)
+                                Duration.ofSeconds(5),
+                                Duration.ofMillis(2000)
                         );
 
                         if (lockOpt.isPresent()) {
                             try (DistributedLock lock = lockOpt.get()) {
+                                if (!lock.isValid()) {
+                                    invalidLockDetected.set(true);
+                                }
                                 int current = activeHolders.incrementAndGet();
                                 maxSimultaneousHolders.updateAndGet(max -> Math.max(max, current));
                                 if (current > 1) {
                                     raceDetected.set(true);
                                 }
-                                // Simulate small critical section
-                                Thread.sleep(15);
+                                // Deterministic critical section execution without arbitrary sleeping
+                                int seq = criticalSectionSequence.incrementAndGet();
+                                Thread.yield();
+                                assertEquals(seq, criticalSectionSequence.get(), "Concurrent modification inside critical section");
                                 successCount.incrementAndGet();
                             } finally {
                                 activeHolders.decrementAndGet();
@@ -203,6 +210,7 @@ class InMemoryDistributedLockManagerTest {
 
             assertTrue(completedInTime, "All virtual threads should complete within deadline");
             assertFalse(raceDetected.get(), "Mutual exclusion violation detected! More than 1 thread held lock");
+            assertFalse(invalidLockDetected.get(), "Acquired lock must be valid upon acquisition");
             assertEquals(1, maxSimultaneousHolders.get(), "Maximum simultaneous lock holders must strictly be 1");
             assertTrue(successCount.get() > 0, "At least several threads must successfully acquire and execute");
             assertFalse(lockManager.isLocked(key), "Lock must be released after all threads finish");
