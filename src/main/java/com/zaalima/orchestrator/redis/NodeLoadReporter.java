@@ -3,6 +3,8 @@ package com.zaalima.orchestrator.redis;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -10,6 +12,8 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class NodeLoadReporter {
+
+    private static final Logger log = LoggerFactory.getLogger(NodeLoadReporter.class);
 
     public static final String KEY_PREFIX = "node:load:";
 
@@ -44,9 +48,13 @@ public class NodeLoadReporter {
     // publishes current load to Redis every 5 seconds
     @Scheduled(fixedRate = 5000)
     public void reportLoad() {
-        redisTemplate.opsForValue().set(
-                KEY_PREFIX + nodeId,
-                String.valueOf(activeTasks.get()),
-                ttl);
+        try {
+            redisTemplate.opsForValue().set(
+                    KEY_PREFIX + nodeId,
+                    String.valueOf(activeTasks.get()),
+                    ttl);
+        } catch (Exception e) {
+            log.debug("Unable to publish node load to Redis (Redis offline): {}", e.getMessage());
+        }
     }
 }

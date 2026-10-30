@@ -135,4 +135,23 @@ class ExternalAgentClientTest {
         assertTrue(response.success());
         assertEquals(200, response.statusCode());
     }
+
+    @Test
+    @DisplayName("Two-parameter constructor initializes HttpExternalAgentClient with configured timeouts")
+    void testTwoParameterConstructorInitialization() {
+        HttpExternalAgentClient defaultClient = new HttpExternalAgentClient(resilienceManager, executor);
+        assertNotNull(defaultClient);
+    }
+
+    @Test
+    @DisplayName("Two-parameter constructor is annotated with @Autowired for Spring dependency injection")
+    void testTwoParameterConstructorHasAutowiredAnnotation() throws NoSuchMethodException {
+        var constructor = HttpExternalAgentClient.class.getConstructor(
+                ResilienceManager.class,
+                ResilientOperationExecutor.class
+        );
+        assertNotNull(constructor);
+        assertTrue(constructor.isAnnotationPresent(org.springframework.beans.factory.annotation.Autowired.class),
+                "Constructor must have @Autowired annotation for Spring dependency injection");
+    }
 }
