@@ -134,6 +134,10 @@ public class TaskExecutionService {
         return tasks.get(taskId);
     }
 
+    public java.util.Map<String, AgentTask> getAllTasks() {
+        return java.util.Collections.unmodifiableMap(tasks);
+    }
+
     private boolean isRemoteTask(AgentTask task) {
         String type = task.getTaskType();
         return type != null && (
