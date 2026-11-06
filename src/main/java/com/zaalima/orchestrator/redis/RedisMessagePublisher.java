@@ -1,5 +1,6 @@
 package com.zaalima.orchestrator.redis;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.stereotype.Service;
@@ -12,7 +13,7 @@ public class RedisMessagePublisher {
 
     public RedisMessagePublisher(
             StringRedisTemplate redisTemplate,
-            ChannelTopic agentTopic) {
+            @Qualifier("agentTopic") ChannelTopic agentTopic) {
         this.redisTemplate = redisTemplate;
         this.agentTopic = agentTopic;
     }
