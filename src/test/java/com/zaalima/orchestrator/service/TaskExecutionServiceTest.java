@@ -381,5 +381,32 @@ class TaskExecutionServiceTest {
 	            "Rejected task must not appear in the registry"
 	    );
 	}
+	@Test
+	@DisplayName("Task lookup uses exact case-sensitive task IDs")
+	void testTaskLookupIsCaseSensitive() throws Exception {
+
+	    when(lockManager.tryAcquire(
+	            eq("lock:task:Task-ABC"),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.empty());
+
+	    AgentTask task = new AgentTask(
+	            "Task-ABC",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+
+	    Future<?> future = service.submitTask(task);
+	    future.get(5, TimeUnit.SECONDS);
+
+	    assertSame(task, service.getTask("Task-ABC"));
+
+	    assertNull(
+	            service.getTask("task-abc"),
+	            "Task lookup must distinguish uppercase and lowercase IDs"
+	    );
+	}
 
 }
