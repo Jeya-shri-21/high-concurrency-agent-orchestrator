@@ -324,5 +324,37 @@ class TaskExecutionServiceTest {
 	            "A new service should not contain any tasks"
 	    );
 	}
+	@Test
+	@DisplayName("Task registry tracks multiple submitted tasks")
+	void testTaskRegistryTracksMultipleTasks() throws Exception {
+
+	    when(lockManager.tryAcquire(
+	            anyString(),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.empty());
+
+	    AgentTask firstTask = new AgentTask(
+	            "registry-task-1", "agent-1", "PROCESS", "payload-1"
+	    );
+
+	    AgentTask secondTask = new AgentTask(
+	            "registry-task-2", "agent-2", "PROCESS", "payload-2"
+	    );
+
+	    Future<?> firstFuture = service.submitTask(firstTask);
+	    Future<?> secondFuture = service.submitTask(secondTask);
+
+	    firstFuture.get(5, TimeUnit.SECONDS);
+	    secondFuture.get(5, TimeUnit.SECONDS);
+
+	    assertEquals(2, service.getAllTasks().size());
+
+	    assertSame(firstTask, service.getTask("registry-task-1"));
+	    assertSame(secondTask, service.getTask("registry-task-2"));
+
+	    assertEquals(TaskStatus.FAILED, firstTask.getStatus());
+	    assertEquals(TaskStatus.FAILED, secondTask.getStatus());
+	}
 
 }
