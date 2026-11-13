@@ -316,5 +316,13 @@ class TaskExecutionServiceTest {
 	            "External code must not modify the task registry"
 	    );
 	}
+	@Test
+	@DisplayName("New task execution service has an empty task registry")
+	void testTaskRegistryInitiallyEmpty() {
+	    assertTrue(
+	            service.getAllTasks().isEmpty(),
+	            "A new service should not contain any tasks"
+	    );
+	}
 
 }
