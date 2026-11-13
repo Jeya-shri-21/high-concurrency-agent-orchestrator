@@ -356,5 +356,57 @@ class TaskExecutionServiceTest {
 	    assertEquals(TaskStatus.FAILED, firstTask.getStatus());
 	    assertEquals(TaskStatus.FAILED, secondTask.getStatus());
 	}
+	@Test
+	@DisplayName("Task registry rejects external task insertion")
+	void testTaskRegistryRejectsExternalInsertion() {
+
+	    AgentTask unauthorizedTask = new AgentTask(
+	            "external-task",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+
+	    assertThrows(
+	            UnsupportedOperationException.class,
+	            () -> service.getAllTasks().put(
+	                    unauthorizedTask.getTaskId(),
+	                    unauthorizedTask
+	            ),
+	            "External code must not insert tasks directly into the registry"
+	    );
+
+	    assertNull(
+	            service.getTask("external-task"),
+	            "Rejected task must not appear in the registry"
+	    );
+	}
+	@Test
+	@DisplayName("Task lookup uses exact case-sensitive task IDs")
+	void testTaskLookupIsCaseSensitive() throws Exception {
+
+	    when(lockManager.tryAcquire(
+	            eq("lock:task:Task-ABC"),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.empty());
+
+	    AgentTask task = new AgentTask(
+	            "Task-ABC",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+
+	    Future<?> future = service.submitTask(task);
+	    future.get(5, TimeUnit.SECONDS);
+
+	    assertSame(task, service.getTask("Task-ABC"));
+
+	    assertNull(
+	            service.getTask("task-abc"),
+	            "Task lookup must distinguish uppercase and lowercase IDs"
+	    );
+	}
 
 }
