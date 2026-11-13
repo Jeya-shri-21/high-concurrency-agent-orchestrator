@@ -299,5 +299,13 @@ class TaskExecutionServiceTest {
 	    assertEquals(TaskStatus.COMPLETED,
 	            service.getTask("task-retrieval").getStatus());
 	}
+	@Test
+	@DisplayName("Unknown task ID returns null")
+	void testUnknownTaskIdReturnsNull() {
+	    assertNull(
+	            service.getTask("non-existent-task"),
+	            "Unknown task IDs should return null"
+	    );
+	}
 
 }
