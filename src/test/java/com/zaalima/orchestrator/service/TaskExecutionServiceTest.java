@@ -307,5 +307,14 @@ class TaskExecutionServiceTest {
 	            "Unknown task IDs should return null"
 	    );
 	}
+	@Test
+	@DisplayName("Task registry cannot be modified externally")
+	void testTaskRegistryIsUnmodifiable() {
+	    assertThrows(
+	            UnsupportedOperationException.class,
+	            () -> service.getAllTasks().clear(),
+	            "External code must not modify the task registry"
+	    );
+	}
 
 }
