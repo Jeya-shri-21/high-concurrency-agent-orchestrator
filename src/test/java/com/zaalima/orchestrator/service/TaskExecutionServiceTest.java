@@ -356,5 +356,30 @@ class TaskExecutionServiceTest {
 	    assertEquals(TaskStatus.FAILED, firstTask.getStatus());
 	    assertEquals(TaskStatus.FAILED, secondTask.getStatus());
 	}
+	@Test
+	@DisplayName("Task registry rejects external task insertion")
+	void testTaskRegistryRejectsExternalInsertion() {
+
+	    AgentTask unauthorizedTask = new AgentTask(
+	            "external-task",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+
+	    assertThrows(
+	            UnsupportedOperationException.class,
+	            () -> service.getAllTasks().put(
+	                    unauthorizedTask.getTaskId(),
+	                    unauthorizedTask
+	            ),
+	            "External code must not insert tasks directly into the registry"
+	    );
+
+	    assertNull(
+	            service.getTask("external-task"),
+	            "Rejected task must not appear in the registry"
+	    );
+	}
 
 }
