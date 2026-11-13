@@ -274,6 +274,30 @@ class TaskExecutionServiceTest {
 	    assertEquals(TaskStatus.COMPLETED, task.getStatus());
 	    verify(distributedLock).close();
 	}
+	@Test
+	@DisplayName("Submitted task can be retrieved by its task ID")
+	void testSubmittedTaskCanBeRetrievedById() throws Exception {
+	    when(lockManager.tryAcquire(
+	            eq("lock:task:task-retrieval"),
+	            any(Duration.class),
+	            any(Duration.class)
+	    )).thenReturn(Optional.of(distributedLock));
 
+	    when(distributedLock.isValid()).thenReturn(true);
+
+	    AgentTask task = new AgentTask(
+	            "task-retrieval",
+	            "agent-1",
+	            "PROCESS",
+	            "payload"
+	    );
+
+	    Future<?> future = service.submitTask(task);
+	    future.get(5, TimeUnit.SECONDS);
+
+	    assertSame(task, service.getTask("task-retrieval"));
+	    assertEquals(TaskStatus.COMPLETED,
+	            service.getTask("task-retrieval").getStatus());
+	}
 
 }
