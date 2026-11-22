@@ -43,6 +43,7 @@ services:
       - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - ORCHESTRATOR_NODE_ID=${NODE_ID_PRIMARY:-node-1}
       - ORCHESTRATOR_NODE_LOAD_TTL_SECONDS=${NODE_LOAD_TTL_SECONDS:-15}
+      - ORCHESTRATOR_LOCK_TYPE=${LOCK_TYPE:-redis}
       - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:---enable-preview -XX:+UseG1GC -XX:MaxRAMPercentage=75.0}
     depends_on:
       redis:
@@ -76,6 +77,7 @@ services:
       - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - ORCHESTRATOR_NODE_ID=${NODE_ID_SECONDARY:-node-2}
       - ORCHESTRATOR_NODE_LOAD_TTL_SECONDS=${NODE_LOAD_TTL_SECONDS:-15}
+      - ORCHESTRATOR_LOCK_TYPE=${LOCK_TYPE:-redis}
       - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:---enable-preview -XX:+UseG1GC -XX:MaxRAMPercentage=75.0}
     depends_on:
       redis:

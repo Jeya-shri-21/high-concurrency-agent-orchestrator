@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicReference;
  * mirroring the atomic semantics of Redis {@code SET NX PX} and the ownership-verifying Lua release script.
  */
 @Component("inMemoryDistributedLockManager")
-@Primary
 public class InMemoryDistributedLockManager implements DistributedLockManager {
 
     private final String instanceId;
